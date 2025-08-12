@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Continuous Surface Wave — Interactive Widget (v3)</title>
+  <style>
+    :root{--bg:#f6f8fb;--card:#fff;--accent:#1f4ed8;--muted:#6b7280}
+    html,body{height:100%;margin:0;font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial}
+    body{background:var(--bg);padding:18px;color:#0f172a}
+    .wrap{max-width:1200px;margin:0 auto;background:var(--card);padding:16px;border-radius:10px;box-shadow:0 10px 30px rgba(16,24,40,0.06)}
+    h1{margin:0 0 6px;font-size:18px}
+    p.lead{margin:0 0 12px;color:var(--muted)}
+
+    /* controls */
+    .controls{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:12px}
+    .ctrl{background:#fbfdff;border:1px solid #e6eef9;padding:8px;border-radius:8px;flex:1;min-width:180px}
+    label{display:block;font-size:13px;margin-bottom:6px}
+    input[type=range]{width:100%}
+    .value{font-weight:700}
+
+    /* main plot */
+    .main-svg{width:100%;height:320px;border-radius:8px;background:linear-gradient(180deg,#ffffff 0%, #fbfdff 100%);border:1px solid #e8eef9;overflow:visible}
+
+    /* geophone panels grid */
+    .geo-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:12px}
+    .geo-panel{background:var(--card);border:1px solid #eef3fb;border-radius:8px;padding:8px;min-height:88px;position:relative}
+    .geo-title{font-size:13px;margin-bottom:6px}
+
+    /* phase plots below — two columns each width of three geophone panels */
+    .phase-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+    .phase-card{background:var(--card);border:1px solid #eef3fb;border-radius:8px;padding:8px}
+    canvas{width:100%;display:block}
+
+    /* alias highlight (background yellow when aliasing) */
+    .aliasing{background:yellow}
+
+    /* nearfield highlight (background orange when source is in the near field) */
+    .nearfield{background:orange}
+
+    /* small note */
+    .note{font-size:12px;color:var(--muted);margin-top:8px}
+  </style>
+</head>
+<body>
+  <div class="wrap" id="widgetWrap">
+    <h1>Continuous Surface Wave — Interactive Widget</h1>
+    <p class="lead">Sliders: frequency, phase velocity, geophone spacing and first geophone offset. Main plot shows source, surface wave and 6 geophones; panels show each geophone's local sine &amp; dial. Bottom plots show wrapped (degrees) and unwrapped phase with best-fit.</p>
+
+    <div class="controls" id="controls">
+      <div class="ctrl">
+        <label for="freq">Frequency (Hz)</label>
+        <input id="freq" type="range" min="1" max="100" step="0.1" value="50.0">
+        <div class="small">Value: <span id="freqVal" class="value">50.0</span> Hz</div>
+      </div>
+
+      <div class="ctrl">
+        <label for="vel">Phase velocity (m/s)</label>
+        <input id="vel" type="range" min="50" max="500" step="1" value="200">
+        <div class="small">Value: <span id="velVal" class="value">200</span> m/s</div>
+      </div>
+
+      <div class="ctrl">
+        <label for="spacing">Geophone spacing (m)</label>
+        <input id="spacing" type="range" min="0.1" max="2.5" step="0.01" value="0.75">
+        <div class="small">Value: <span id="spacingVal" class="value">0.75</span> m</div>
+      </div>
+
+      <div class="ctrl">
+        <label for="firstOffset">First geophone offset (m)</label>
+        <input id="firstOffset" type="range" min="0" max="10" step="0.01" value="5.0">
+        <div class="small">Value: <span id="firstOffsetVal" class="value">5.00</span> m</div>
+      </div>
+    </div>
+
+    <svg id="mainSvg" class="main-svg" viewBox="0 0 1200 320" preserveAspectRatio="xMidYMid meet"></svg>
+
+    <div style="margin-top:8px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <div style="background:#fff;border:1px solid #e6eef9;padding:8px;border-radius:8px">Wavelength: <span id="lambdaVal" style="font-weight:700">—</span> m</div>
+      <div style="background:#fff;border:1px solid #e6eef9;padding:8px;border-radius:8px">First sensor distance: <span id="firstDist" style="font-weight:700">—</span> m</div>
+      <div style="margin-left:auto;color:#6b7280;font-size:13px">Dashed lines (bottom plots): <span style="color:#b91c1c">red</span> = Nyquist, <span style="color:#16a34a">green</span> = λ = 5×first distance</div>
+    </div>
+
+    <div class="geo-grid" id="geoGrid" aria-live="polite"></div>
+
+    <div class="phase-grid">
+      <div class="phase-card">
+        <h3 style="margin:0 0 6px;font-size:14px">1) Phase (wrapped) vs distance</h3>
+        <canvas id="phaseWrapped" width="600" height="400"></canvas>
+        <div class="note">Y axis: phase in degrees (0–360). Dashed red/green lines indicate Nyquist / 5× distance gradients.</div>
+      </div>
+      <div class="phase-card">
+        <h3 style="margin:0 0 6px;font-size:14px">2) Phase (unwrapped) vs distance + best fit</h3>
+        <canvas id="phaseUnwrapped" width="600" height="400"></canvas>
+        <div class="note">Best-fit line slope = gradient (deg/m). Estimated λ = 360° / gradient.</div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // Constants and helpers
+    const TWO_PI = Math.PI * 2;
+    const RAD2DEG = 180 / Math.PI;
+    const N = 6;
+    const baseWidth = 1200; const baseHeight = 320;
+    const srcX = 80; const groundY = 220;
+
+    const freq = document.getElementById('freq');
+    const vel = document.getElementById('vel');
+    const spacing = document.getElementById('spacing');
+    const firstOffset = document.getElementById('firstOffset');
+    const freqVal = document.getElementById('freqVal');
+    const velVal = document.getElementById('velVal');
+    const spacingVal = document.getElementById('spacingVal');
+    const firstOffsetVal = document.getElementById('firstOffsetVal');
+    const lambdaVal = document.getElementById('lambdaVal');
+    const firstDistEl = document.getElementById('firstDist');
+    const mainSvg = document.getElementById('mainSvg');
+    const geoGrid = document.getElementById('geoGrid');
+    const canvasWrapped = document.getElementById('phaseWrapped');
+    const canvasUnwrapped = document.getElementById('phaseUnwrapped');
+    const widgetWrap = document.getElementById('widgetWrap');
+
+    // small helpers
+    function mod2pi(x){ return ((x % TWO_PI) + TWO_PI) % TWO_PI; }
+    function prepareCanvas(c){
+      const dpr = window.devicePixelRatio || 1;
+      const rect = c.getBoundingClientRect();
+      c.width = Math.round(rect.width * dpr);
+      c.height = Math.round(rect.height * dpr);
+      c.style.width = rect.width + 'px';
+      c.style.height = rect.height + 'px';
+      const ctx = c.getContext('2d');
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+      return ctx;
+    }
+    function linearFit(x,y){
+      const n = x.length; const mx = x.reduce((a,b)=>a+b,0)/n; const my = y.reduce((a,b)=>a+b,0)/n;
+      let num=0, den=0; for(let i=0;i<n;i++){ num += (x[i]-mx)*(y[i]-my); den += (x[i]-mx)*(x[i]-mx); }
+      const m = den===0?0:num/den; const c = my - m*mx; return {m,c};
+    }
+    function unwrapRad(phases){
+      const out = phases.slice();
+      for(let i=1;i<out.length;i++){
+        let diff = out[i] - out[i-1];
+        if(diff > Math.PI) out[i] -= TWO_PI;
+        else if(diff < -Math.PI) out[i] += TWO_PI;
+      }
+      for(let i=1;i<out.length;i++){
+        while(out[i]-out[i-1] > Math.PI) out[i] -= TWO_PI;
+        while(out[i]-out[i-1] < -Math.PI) out[i] += TWO_PI;
+      }
+      return out;
+    }
+
+    // Build static geo panels
+    function createGeoPanels(){
+      geoGrid.innerHTML = '';
+      for(let i=0;i<N;i++){
+        const div = document.createElement('div');
+        div.className = 'geo-panel';
+        div.innerHTML = `<div class='geo-title'>G${i+1}</div><canvas class='mini' style='width:100%;height:64px;'></canvas>`;
+        geoGrid.appendChild(div);
+      }
+    }
+    createGeoPanels();
+
+    function draw(){
+      const f = parseFloat(freq.value);
+      const v = parseFloat(vel.value);
+      const dx = parseFloat(spacing.value);
+      let firstOff = parseFloat(firstOffset.value);
+      // keep first offset reasonable: if user hasn't changed it and default uses 2*spacing, ensure default
+      // (we keep explicit slider value; default set in HTML to 2.0)
+
+      freqVal.textContent = f.toFixed(2);
+      velVal.textContent = v.toFixed(0);
+      spacingVal.textContent = dx.toFixed(2);
+      firstOffsetVal.textContent = firstOff.toFixed(2);
+
+      const lambda = v / f; // metres
+      lambdaVal.textContent = isFinite(lambda)? lambda.toFixed(3) : '—';
+      firstDistEl.textContent = firstOff.toFixed(3);
+
+      // compute positions (pixels per metre)
+      const lastDistance = firstOff + dx*(N-1);
+      const availablePx = baseWidth - srcX - 80; // margin
+      const ppM = lastDistance>0 ? availablePx / lastDistance : 40; // px per metre
+
+      // sensors positions
+      const sensors = [];
+      for(let i=0;i<N;i++){
+        const xm = firstOff + i*dx;
+        const xpx = srcX + xm*ppM;
+        sensors.push({xm,xpx});
+      }
+
+      // compute lambda in px and possibly extend viewBox so arrow fits (avoid artificially capping arrow)
+      const lambdaPx = lambda * ppM;
+      let vbW = baseWidth;
+      const arrowEndX = srcX + lambdaPx + 80;
+      if(arrowEndX > baseWidth){ vbW = Math.ceil(arrowEndX); }
+      // set viewBox width (height fixed)
+      mainSvg.setAttribute('viewBox', `0 0 ${vbW} ${baseHeight}`);
+
+      // create main svg content
+      mainSvg.innerHTML = '';
+      mainSvg.insertAdjacentHTML('beforeend', `<defs><marker id='arrow' markerWidth='10' markerHeight='10' refX='5' refY='5' orient='auto'><path d='M0,0 L10,5 L0,10 z' fill='#ff7b72'></path></marker></defs>`);
+      mainSvg.insertAdjacentHTML('beforeend', `<line x1='20' y1='${groundY}' x2='${vbW-20}' y2='${groundY}' stroke='#cfe2ff' stroke-width='2'></line>`);
+      mainSvg.insertAdjacentHTML('beforeend', `<g id='source'><rect x='${srcX-10}' y='${groundY-46}' width='20' height='36' rx='4' fill='#1f4ed8'></rect><text x='${srcX}' y='${groundY-52}' text-anchor='middle' font-size='12' fill='#05204a'>Source</text></g>`);
+
+      // draw sine surface wave across main
+      if(isFinite(lambda) && lambda>0){
+        const amp = 28; const points = [];
+        const leftPx = srcX; const rightPx = srcX + Math.max(lastDistance * ppM, lambdaPx, availablePx);
+        const steps = Math.max(200, Math.floor((rightPx-leftPx)/2));
+        for(let i=0;i<=steps;i++){
+          const px = leftPx + (i/steps)*(rightPx - leftPx);
+          const xm = (px - srcX) / ppM; // metres
+          const y = groundY - Math.sin((2*Math.PI * xm)/lambda) * amp - 40; // offset upward
+          points.push(`${px},${y}`);
+        }
+        mainSvg.insertAdjacentHTML('beforeend', `<polyline points='${points.join(' ')}' fill='none' stroke='${'#1f4ed8'}' stroke-width='2'></polyline>`);
+      }
+
+      // sensors and labels
+      const phaseWrapped = [];
+      const phaseUnwrappedRad = [];
+      for(let i=0;i<sensors.length;i++){
+        const s = sensors[i];
+        mainSvg.insertAdjacentHTML('beforeend', `<g transform='translate(${s.xpx},${groundY})' id='sensor${i}'>
+          <line x1='0' y1='0' x2='0' y2='-36' stroke='#0b1220' stroke-width='2'></line>
+          <circle cx='0' cy='-44' r='8' fill='#e6f5ff' stroke='#1f4ed8'></circle>
+        </g>`);
+        const phiRad = isFinite(lambda)? (2*Math.PI * (s.xm / lambda)) : 0;
+        const phiWrapped = mod2pi(phiRad);
+        phaseWrapped.push(phiWrapped * RAD2DEG);
+        phaseUnwrappedRad.push(phiRad);
+        // label distance and wrapped-degree
+        mainSvg.insertAdjacentHTML('beforeend', `<text x='${s.xpx}' y='${groundY+20}' text-anchor='middle' font-size='12' fill='#123'>${s.xm.toFixed(2)} m — ${ (phiWrapped*RAD2DEG).toFixed(1) }°</text>`);
+      }
+
+      // wavelength arrow (draw using lambdaPx; if very large arrow extends beyond viewbox because we adjusted viewBox)
+      if(isFinite(lambda) && lambda>0){
+        const arrowStart = srcX + 20;
+        const arrowEnd = srcX + lambdaPx + 20;
+        mainSvg.insertAdjacentHTML('beforeend', `<line x1='${arrowStart}' y1='60' x2='${arrowEnd}' y2='60' stroke='#ff7b72' stroke-width='3' marker-start='url(#arrow)' marker-end='url(#arrow)'></line>`);
+        mainSvg.insertAdjacentHTML('beforeend', `<text x='${arrowStart + (lambdaPx/2)}' y='48' text-anchor='middle' font-size='12' fill='#b91c1c'>λ = ${lambda.toFixed(3)} m</text>`);
+      }
+
+      // draw mini panels (sine + centre dot + dial top-right)
+      const panels = Array.from(document.querySelectorAll('.geo-panel'));
+      panels.forEach((panel, idx) => {
+        const canvas = panel.querySelector('canvas');
+        const ctx = prepareCanvas(canvas);
+        const w = canvas.clientWidth; const h = canvas.clientHeight;
+        ctx.clearRect(0,0,w,h);
+        // axis
+        ctx.beginPath(); ctx.moveTo(6, h/2); ctx.lineTo(w-6, h/2); ctx.strokeStyle='#eef3fb'; ctx.lineWidth=1; ctx.stroke();
+        // sine plot: show 2 cycles across panel, phase offset for sensor
+        const phiRad = phaseUnwrappedRad[idx];
+        const amp = Math.min(28, h*0.35);
+        ctx.beginPath();
+        for(let px=0; px<=w; px+=2){
+          const t = px/w; const theta = t * TWO_PI * 2 + phiRad; const y = h/2 - Math.sin(theta) * amp;
+          if(px===0) ctx.moveTo(px,y); else ctx.lineTo(px,y);
+        }
+        ctx.strokeStyle = '#1f4ed8'; ctx.lineWidth = 2; ctx.stroke();
+        // centre dot - corresponds to phase at panel centre
+        const centerX = w/2; const centerY = h/2 - Math.sin(phiRad)*amp; ctx.beginPath(); ctx.arc(centerX, centerY, 5, 0, TWO_PI); ctx.fillStyle='#ff7b72'; ctx.fill();
+        // dial top-right
+        const dialR = 14; const dialCx = w - 24; const dialCy = 20;
+        ctx.beginPath(); ctx.arc(dialCx, dialCy, dialR, 0, TWO_PI); ctx.strokeStyle='#9aaeea'; ctx.lineWidth=2; ctx.stroke();
+        const ang = - (mod2pi(phiRad)) + Math.PI/2; // rotate so 0 at top
+        const px2 = dialCx + Math.cos(ang) * (dialR-4); const py2 = dialCy + Math.sin(ang) * (dialR-4);
+        ctx.beginPath(); ctx.moveTo(dialCx,dialCy); ctx.lineTo(px2,py2); ctx.strokeStyle='#b91c1c'; ctx.lineWidth=2; ctx.stroke();
+        ctx.font = '11px sans-serif'; ctx.fillStyle = '#123'; ctx.textAlign='center'; ctx.fillText((mod2pi(phiRad)*RAD2DEG).toFixed(1) + '°', dialCx, dialCy + dialR + 12);
+      });
+
+      // Prepare bottom plots data
+      const xs = sensors.map(s=>s.xm);
+      // wrapped in degrees 0..360
+      const wrappedDeg = phaseWrapped.slice();
+      // unwrapped in radians -> convert to degrees
+      const unwrappedRad = unwrapRad(phaseUnwrappedRad.slice());
+      const unwrappedDeg = unwrappedRad.map(r => r*RAD2DEG);
+
+      drawPhaseWrapped(canvasWrapped, xs, wrappedDeg, firstOff, dx);
+      drawPhaseUnwrapped(canvasUnwrapped, xs, unwrappedDeg, firstOff, dx);
+
+      // aliasing background yellow when lambda < 2*dx
+      if(lambda < 2*dx){ widgetWrap.style.backgroundColor = 'yellow'; }
+	  // nearfield background orange when lambda > 5*firstOff
+      else if(lambda > 5*firstOff){ widgetWrap.style.backgroundColor = 'orange'; }
+      else { widgetWrap.style.backgroundColor = ''; }
+      
+    }
+
+    function drawPhaseWrapped(canvas, xs, wrappedDeg, firstOff, spacing){
+      const ctx = prepareCanvas(canvas);
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      const w = canvas.clientWidth; const h = canvas.clientHeight;
+      const padL = 80, padR = 12, padT = 20, padB = 50;
+      // axis ranges
+      const xMin = xs[0], xMax = xs[xs.length-1];
+      const yMin = 360, yMax = 0;
+      // axes
+      ctx.strokeStyle = '#e6eef9'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, h-padB); ctx.lineTo(w-padR, h-padB); ctx.stroke();
+      // ticks and labels (x ticks at sensor distances)
+      ctx.fillStyle='#123'; ctx.font='12px sans-serif'; ctx.textAlign='center';
+      xs.forEach(x => { const px = padL + ((x-xMin)/(xMax-xMin))*(w-padL-padR); ctx.fillText(x.toFixed(2), px, h-padB+20); });
+      // y ticks every 90°
+      ctx.textAlign='right'; ctx.font='12px sans-serif'; [0,90,180,270,360].forEach(val => { const py = padT + (1 - ( (val-yMin)/(yMax-yMin) ))*(h-padT-padB); ctx.fillText(val + '°', padL-8, py+4); ctx.beginPath(); ctx.moveTo(padL-4,py); ctx.lineTo(padL,py); ctx.strokeStyle='#e6eef9'; ctx.stroke(); });
+
+      // plot wrapped points and connecting line (no wrapping of helper lines)
+      ctx.strokeStyle='#1f4ed8'; ctx.lineWidth=2; ctx.beginPath();
+      for(let i=0;i<xs.length;i++){
+        const xPx = padL + ((xs[i]-xMin)/(xMax-xMin))*(w-padL-padR);
+        const yPx = padT + (1 - ((wrappedDeg[i]-yMin)/(yMax-yMin)))*(h-padT-padB);
+        if(i===0) ctx.moveTo(xPx,yPx); else ctx.lineTo(xPx,yPx);
+        ctx.beginPath(); ctx.arc(xPx,yPx,3,0,TWO_PI); ctx.fillStyle='#1f4ed8'; ctx.fill();
+      }
+      ctx.stroke();
+
+      // Save the context state and define the clipping region
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(padL, padT, w - padL - padR, h - padT - padB);
+      ctx.clip();
+
+      // dashed lines: Nyquist and grad5 (in degrees per metre), do not wrap — allow them to extend off plot
+      const x1 = xs[0]; 
+      const y1 = wrappedDeg[0];
+      const nyquistGradDeg = (Math.PI / spacing) * RAD2DEG; // deg/m
+      const grad5Deg = (TWO_PI / (5 * x1 || 1e-9)) * RAD2DEG; // deg/m
+      ctx.setLineDash([6,4]); 
+      ctx.lineWidth = 1.5;
+
+      // nyquist
+      ctx.strokeStyle = '#b91c1c'; 
+      ctx.beginPath();
+      for(let xi = xMin; xi <= xMax; xi += (xMax - xMin) / 200) { 
+        const yVal = y1 + nyquistGradDeg * (xi - x1);
+        const xPx = padL + ((xi - xMin) / (xMax - xMin)) * (w - padL - padR);
+        const yPx = padT + (1 - ((yVal - yMin) / (yMax - yMin))) * (h - padT - padB);
+        if (xi === xMin) ctx.moveTo(xPx, yPx); 
+        else ctx.lineTo(xPx, yPx);
+      }
+      ctx.stroke();
+
+      // grad5
+      ctx.strokeStyle = '#16a34a'; 
+      ctx.beginPath();
+      for(let xi = xMin; xi <= xMax; xi += (xMax - xMin) / 200) { 
+        const yVal = y1 + grad5Deg * (xi - x1);
+        const xPx = padL + ((xi - xMin) / (xMax - xMin)) * (w - padL - padR);
+        const yPx = padT + (1 - ((yVal - yMin) / (yMax - yMin))) * (h - padT - padB);
+        if (xi === xMin) ctx.moveTo(xPx, yPx); 
+        else ctx.lineTo(xPx, yPx);
+      }
+      ctx.stroke();
+
+      ctx.setLineDash([]);
+
+      // Restore the context state, removing clipping
+      ctx.restore();
+
+      // labels
+      ctx.fillStyle='#123'; ctx.font='12px sans-serif'; ctx.textAlign='center'; ctx.fillText('Distance (m)', w/2, h-8);
+      ctx.save(); ctx.translate(12, h/2); ctx.rotate(-Math.PI/2); ctx.textAlign='center'; ctx.fillText('Phase (°)', 0,0); ctx.restore();
+    }
+
+    function drawPhaseUnwrapped(canvas, xs, unwrappedDeg, firstOff, spacing){
+      const ctx = prepareCanvas(canvas);
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      const w = canvas.clientWidth; const h = canvas.clientHeight;
+      const padL = 80, padR = 12, padT = 20, padB = 50;
+      const xMin = xs[0], xMax = xs[xs.length-1];
+      let yMin = Math.min(...unwrappedDeg); let yMax = Math.max(...unwrappedDeg);
+      const margin = (yMax - yMin) * 0.15 + 1e-6;
+      yMin -= margin; yMax += margin;
+
+      // axes
+      ctx.strokeStyle='#e6eef9'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(padL,padT); ctx.lineTo(padL,h-padB); ctx.lineTo(w-padR,h-padB); ctx.stroke();
+      // x ticks
+      ctx.fillStyle='#123'; ctx.font='12px sans-serif'; ctx.textAlign='center'; xs.forEach(x=>{ const px = padL + ((x-xMin)/(xMax-xMin))*(w-padL-padR); ctx.fillText(x.toFixed(2), px, h-padB+20); });
+      // y ticks: choose 5 ticks
+      ctx.textAlign='right'; ctx.font='12px sans-serif'; const ticks = 5; for(let k=0;k<=ticks;k++){ const val = yMin + (k/ticks)*(yMax-yMin); const py = padT + ((val - yMin)/(yMax-yMin))*(h-padT-padB); // NOTE: reversed direction so larger values plot lower
+        ctx.fillText(val.toFixed(1)+'°', padL-8, py+4); ctx.beginPath(); ctx.moveTo(padL-4,py); ctx.lineTo(padL,py); ctx.strokeStyle='#e6eef9'; ctx.stroke(); }
+
+      // plot points and connecting line (unwrapped). IMPORTANT: Y axis reversed (larger values plot lower)
+      ctx.strokeStyle='#1f4ed8'; ctx.lineWidth=2; ctx.beginPath();
+      for(let i=0;i<xs.length;i++){
+        const xPx = padL + ((xs[i]-xMin)/(xMax-xMin))*(w-padL-padR);
+        const yPx = padT + ((unwrappedDeg[i] - yMin)/(yMax-yMin))*(h-padT-padB); // reversed mapping
+        if(i===0) ctx.moveTo(xPx,yPx); else ctx.lineTo(xPx,yPx);
+        ctx.beginPath(); ctx.arc(xPx,yPx,3,0,TWO_PI); ctx.fillStyle='#1f4ed8'; ctx.fill();
+      }
+      ctx.stroke();
+
+      // best-fit (solid gray)
+      const {m,c} = linearFit(xs, unwrappedDeg);
+      ctx.strokeStyle = '#6b7280'; ctx.lineWidth = 2; ctx.setLineDash([]);
+      const xPx0 = padL + ((xMin-xMin)/(xMax-xMin))*(w-padL-padR); const yPx0 = padT + ((m*xMin + c - yMin)/(yMax-yMin))*(h-padT-padB);
+      const xPx1 = padL + ((xMax-xMin)/(xMax-xMin))*(w-padL-padR); const yPx1 = padT + ((m*xMax + c - yMin)/(yMax-yMin))*(h-padT-padB);
+      ctx.beginPath(); ctx.moveTo(xPx0,yPx0); ctx.lineTo(xPx1,yPx1); ctx.stroke();
+
+      // compute estimated lambda from gradient (deg/m): slope m deg/m -> lambda = 360 / m
+      const grad = m; const lambdaEst = grad !==0 ? (360 / grad) : Infinity;
+      ctx.fillStyle='#123'; ctx.font='12px monospace'; ctx.textAlign='left'; ctx.fillText(`fit: φ = ${m.toFixed(4)}·x + ${c.toFixed(3)} deg`, padL, padT + 14);
+      ctx.fillText(`λ = 360° / gradient = ${isFinite(lambdaEst)? lambdaEst.toFixed(3) : '∞'} m`, padL, padT + 30);
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(padL, padT, w - padL - padR, h - padT - padB);
+      ctx.clip();
+
+      const x1 = xs[0];
+      const y1 = unwrappedDeg[0];
+      const nyquistGradDeg = (Math.PI / spacing) * RAD2DEG; // deg/m
+      const grad5Deg = (TWO_PI / (5 * x1 || 1e-9)) * RAD2DEG;
+
+      ctx.setLineDash([6,4]);
+      ctx.lineWidth = 1.5;
+
+      // Nyquist line (red)
+      ctx.strokeStyle = '#b91c1c';
+      ctx.beginPath();
+      for(let xi = xMin; xi <= xMax; xi += (xMax - xMin) / 400) {
+        const yVal = y1 + nyquistGradDeg * (xi - x1);
+        const xPx = padL + ((xi - xMin) / (xMax - xMin)) * (w - padL - padR);
+        const yPx = padT + ((yVal - yMin) / (yMax - yMin)) * (h - padT - padB);
+        if (xi === xMin) ctx.moveTo(xPx, yPx);
+        else ctx.lineTo(xPx, yPx);
+      }
+      ctx.stroke();
+
+      // 5x distance line (green)
+      ctx.strokeStyle = '#16a34a';
+      ctx.beginPath();
+      for(let xi = xMin; xi <= xMax; xi += (xMax - xMin) / 400) {
+        const yVal = y1 + grad5Deg * (xi - x1);
+        const xPx = padL + ((xi - xMin) / (xMax - xMin)) * (w - padL - padR);
+        const yPx = padT + ((yVal - yMin) / (yMax - yMin)) * (h - padT - padB);
+        if (xi === xMin) ctx.moveTo(xPx, yPx);
+        else ctx.lineTo(xPx, yPx);
+      }
+      ctx.stroke();
+
+      ctx.setLineDash([]);
+      ctx.restore();
+
+
+      // Draw "ALIASING" label on canvas if aliasing is true
+      if(lambdaEst < 0) {
+        ctx.save();
+      
+        ctx.fillStyle = 'rgba(255, 0, 0, 0.6)'; // semi-transparent red
+        ctx.font = 'bold 60px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+      
+        const centerX = canvas.width / 2;
+        const centerY = canvas.height / 2;
+      
+        ctx.fillText('ALIASING', centerX, centerY);
+      
+        ctx.restore();
+      }
+
+
+      // labels
+      ctx.fillStyle='#123'; ctx.font='12px sans-serif'; ctx.textAlign='center'; ctx.fillText('Distance (m)', w/2, h-8);
+      ctx.save(); ctx.translate(12, h/2); ctx.rotate(-Math.PI/2); ctx.textAlign='center'; ctx.fillText('Phase (°, unwrapped)', 0,0); ctx.restore();
+    }
+
+    // event wiring
+    [freq, vel, spacing, firstOffset].forEach(el => el.addEventListener('input', draw));
+    window.addEventListener('resize', draw);
+
+    // initial draw
+    // ensure firstOffset default equals 2x spacing on first load
+    firstOffset.value = (parseFloat(spacing.value) * 2).toFixed(2);
+    firstOffsetVal.textContent = firstOffset.value;
+    draw();
+  </script>
+</body>
+</html>
