@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Geophysics Widgets</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+      Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+    background: #f9fafb;
+    color: #1e293b;
+    margin: 2rem;
+    text-align: center;
+  }
+  header {
+    margin-bottom: 2rem;
+  }
+  svg {
+    max-width: 300px;
+    height: auto;
+    margin-bottom: 1.5rem;
+  }
+  ul {
+    list-style: none;
+    padding: 0;
+    max-width: 320px;
+    margin: 0 auto;
+    text-align: left;
+  }
+  li + li {
+    margin-top: 1rem;
+  }
+  a {
+    text-decoration: none;
+    color: #2563eb;
+    font-weight: 600;
+  }
+  a:hover,
+  a:focus {
+    text-decoration: underline;
+  }
+</style>
+</head>
+<body>
+<header>
+  <svg viewBox="0 0 200 100" aria-hidden="true" role="img" xmlns="http://www.w3.org/2000/svg">
+    <!-- Waveform line -->
+    <path d="M 10 60
+             Q 30 20 50 60
+             T 90 60
+             T 130 60
+             T 170 60
+             T 190 60"
+          fill="none" stroke="#2563eb" stroke-width="3" />
+    <!-- Geophone dots -->
+    <circle cx="30" cy="60" r="6" fill="#f97316" />
+    <circle cx="70" cy="60" r="6" fill="#f97316" />
+    <circle cx="110" cy="60" r="6" fill="#f97316" />
+    <circle cx="150" cy="60" r="6" fill="#f97316" />
+    <circle cx="190" cy="60" r="6" fill="#f97316" />
+    <!-- Vertical source line -->
+    <line x1="10" y1="40" x2="10" y2="80" stroke="#10b981" stroke-width="4" />
+    <circle cx="10" cy="40" r="6" fill="#10b981" />
+  </svg>
+  <h1>Geophysics Widgets</h1>
+  <p>Interactive tools for geophysical data visualization and analysis</p>
+</header>
+<main>
+  <ul>
+    <li><a href="your-widget-link.html">Continuous Surface Wave Widget</a></li>
+  </ul>
+</main>
+</body>
+</html>
