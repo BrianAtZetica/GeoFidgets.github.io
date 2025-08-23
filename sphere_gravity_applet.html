@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Sphere gravity anomaly — interactive applet</title>
+<style>
+  :root{font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial;}
+  body{margin:16px;background:#f7f7fb;color:#111}
+  h1{font-size:18px;margin:0 0 8px}
+  .container{display:grid;grid-template-columns:360px 1fr;gap:16px;align-items:start}
+  .controls{background:#fff;border:1px solid #e2e2f0;padding:12px;border-radius:8px;box-shadow:0 1px 4px rgba(20,20,50,.04)}
+  label{display:block;font-size:12px;color:#333;margin-top:10px}
+  .row{display:flex;align-items:center;gap:8px}
+  input[type=range]{width:100%;}
+  .value{min-width:64px;text-align:right;font-weight:600}
+  .canvas-wrap{background:#fff;border:1px solid #e2e2f0;padding:12px;border-radius:8px}
+  canvas{width:100%;height:420px;background:#ffffff;border-radius:6px}
+  .legend{display:flex;gap:12px;margin-top:8px;align-items:center}
+  .swatch{width:14px;height:3px;display:inline-block}
+  .muted{color:#555;font-size:13px}
+  .foot{margin-top:8px;color:#444;font-size:13px}
+  .controls small{color:#666}
+  
+  /* Keep default thumb style but change fill color */
+  #rhoBase::-webkit-slider-thumb { background-color:#b09557; } /* baseline thumb */
+  #rhoBase::-moz-range-thumb { background-color:#b09557; }
+  #rho::-webkit-slider-thumb { background-color:#6787d2; } /* active thumb */
+  #rho::-moz-range-thumb { background-color:#6787d2; }
+</style>
+</head>
+<body>
+  <h1>Interactive Gravity Anomaly Profile Modeller (Spherical Target))</h1>
+  <div class="container">
+    <div class="controls">
+      <div><strong>Model 1</strong><br><small class="muted">Set parameters for Target 1 (Green)</small></div>
+      <div style="margin-top:8px;">
+        <div class="row">
+          <label style="flex:1">Depth to Top z (m)</label>
+          <div class="value" id="depthValBase"></div>
+        </div>
+        <input id="depthBase" type="range" min="0" max="100" step="1" value="50" />
+
+        <div class="row">
+          <label style="flex:1">Radius R (m)</label>
+          <div class="value" id="radiusValBase"></div>
+        </div>
+        <input id="radiusBase" type="range" min="0.5" max="100" step="0.5" value="10" />
+
+        <div class="row">
+          <label style="flex:1">Density Contrast Δρ (Mg·m⁻³)</label>
+          <div class="value" id="rhoValBase"></div>
+        </div>
+        <input id="rhoBase" type="range" min="-3.00" max="3.00" step="0.01" value="-2.67" />
+      </div>
+
+      <hr style="margin:12px 0">
+      <div><strong>Model 1</strong><br><small class="muted">Set parameters for Target 2 (Blue)</small></div>
+      <div style="margin-top:8px;">
+        <div class="row">
+          <label style="flex:1">Depth to Top z (m)</label>
+          <div class="value" id="depthVal"></div>
+        </div>
+        <input id="depth" type="range" min="0" max="100" step="1" value="50" />
+
+        <div class="row">
+          <label style="flex:1">Radius R (m)</label>
+          <div class="value" id="radiusVal"></div>
+        </div>
+        <input id="radius" type="range" min="0.5" max="100" step="0.5" value="10" />
+
+        <div class="row">
+          <label style="flex:1">Density Contrast Δρ (Mg·m⁻³)</label>
+          <div class="value" id="rhoVal"></div>
+        </div>
+        <input id="rho" type="range" min="-3.00" max="3.00" step="0.01" value="-2.67" />
+      </div>
+
+      <div class="legend">
+        <div><span class="swatch" style="background:#b09557"></span> Target 1</div>
+        <div><span class="swatch" style="background:#6787d2"></span> Target 2</div>
+      </div>
+      <div class="foot">
+        <div>Units: depth & radius in metres, density in Mg·m⁻³ (≡ g·cm⁻³). Output: mGal.</div>
+      </div>
+    </div>
+
+    <div class="canvas-wrap">
+      <canvas id="plot"></canvas>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
+        <div class="muted">Profile axis (x) passes over the sphere centre at x=0</div>
+        <div id="peakInfo" class="muted"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+// Physics: gravity anomaly of a buried sphere at surface along profile
+// Δg(r) = (4/3) π G Δρ R^3 z / (r^2 + z^2)^(3/2)
+// We'll compute Δg in mGal. Inputs: Δρ in g/cm^3 -> convert to kg/m^3 by *1000.
+// G in SI = 6.67430e-11 m^3 kg^-1 s^-2. Convert result (m s^-2) to mGal by *1e5.
+
+const G_SI = 6.67430e-11; // m^3 kg^-1 s^-2
+const toMGal = 1e5; // m s^-2 -> mGal
+
+// DOM
+const cvs = document.getElementById('plot');
+const ctx = cvs.getContext('2d');
+
+const depth = document.getElementById('depth');
+const radius = document.getElementById('radius');
+const rho = document.getElementById('rho');
+
+const depthBase = document.getElementById('depthBase');
+const radiusBase = document.getElementById('radiusBase');
+const rhoBase = document.getElementById('rhoBase');
+
+const depthVal = document.getElementById('depthVal');
+const radiusVal = document.getElementById('radiusVal');
+const rhoVal = document.getElementById('rhoVal');
+
+const depthValBase = document.getElementById('depthValBase');
+const radiusValBase = document.getElementById('radiusValBase');
+const rhoValBase = document.getElementById('rhoValBase');
+
+const peakInfo = document.getElementById('peakInfo');
+
+// Baseline values (from the "base" sliders)
+let baseParams = {
+  z: Number(depthBase.value),
+  R: Number(radiusBase.value),
+  drho: Number(rhoBase.value)
+};
+
+function setText(el,val){el.textContent = (Number(val).toFixed((Math.abs(val) < 10 && val%1 !== 0)?2:0)).toString();}
+
+setText(depthValBase, baseParams.z);
+setText(radiusValBase, baseParams.R);
+setText(rhoValBase, baseParams.drho.toFixed(2));
+
+// Active initial values mirror baseline
+depthVal.textContent = depth.value;
+radiusVal.textContent = radius.value;
+rhoVal.textContent = Number(rho.value).toFixed(2);
+
+function resizeCanvas(){
+  const rect = cvs.getBoundingClientRect();
+  cvs.width = Math.floor(rect.width * devicePixelRatio);
+  cvs.height = Math.floor(rect.height * devicePixelRatio);
+  ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+}
+
+window.addEventListener('resize', ()=>{resizeCanvas(); draw();});
+resizeCanvas();
+
+// compute anomaly at horizontal distance x (m)
+function sphereAnomaly(x,z,R,drho_gpcm3){
+  const z_to_centre = z+R;
+  const drho = drho_gpcm3 * 1000.0; // convert to kg/m3
+  const numerator = (4/3) * Math.PI * G_SI * drho * Math.pow(R,3) * z_to_centre;
+  const denom = Math.pow((x*x + z_to_centre*z_to_centre), 1.5);
+  const val_m_s2 = numerator / denom; // m/s^2
+  return val_m_s2 * toMGal; // mGal
+}
+
+// grid and drawing
+const padding = {l:60,r:20,t:12,b:40};
+function draw(){
+  // get active params
+  const z = Number(depth.value);
+  const R = Number(radius.value);
+  const drho = Number(rho.value);
+
+  // baseline from base sliders
+  baseParams.z = Number(depthBase.value);
+  baseParams.R = Number(radiusBase.value);
+  baseParams.drho = Number(rhoBase.value);
+
+  setText(depthVal, z);
+  setText(radiusVal, R);
+  rhoVal.textContent = drho.toFixed(2);
+
+  setText(depthValBase, baseParams.z);
+  setText(radiusValBase, baseParams.R);
+  rhoValBase.textContent = baseParams.drho.toFixed(2);
+
+  // drawing area
+  const W = cvs.width / devicePixelRatio;
+  const H = cvs.height / devicePixelRatio;
+  ctx.clearRect(0,0,W,H);
+
+  // define profile x range: pick symmetric range based on larger of depth or radius
+  const span = Math.max(4*baseParams.z, 50, 6*R, 6*z);
+  const xMin = -span/2; const xMax = span/2;
+  const n = 600;
+
+  // compute arrays
+  const xs = new Array(n);
+  const baseline = new Array(n);
+  const active = new Array(n);
+  let peak = {val:-Infinity,x:0};
+  for(let i=0;i<n;i++){
+    const xi = xMin + (i/(n-1))*(xMax-xMin);
+    xs[i]=xi;
+    baseline[i] = sphereAnomaly(xi, baseParams.z, baseParams.R, baseParams.drho);
+    active[i] = sphereAnomaly(xi, z, R, drho);
+    if(active[i] > peak.val){ peak.val = active[i]; peak.x = xi; }
+  }
+
+  // y scale auto so both curves fit; show small positive anomalies typical in mGal
+  const all = baseline.concat(active);
+  const yMin = Math.min(...all);
+  const yMax = Math.max(...all);
+  // add small padding
+  const yPad = Math.max(0.05*(yMax-yMin), 0.1);
+  const yLow = yMin - yPad; const yHigh = yMax + yPad;
+
+  // helpers to map
+  function sx(x){ return padding.l + ( (x - xMin) / (xMax - xMin) ) * (W - padding.l - padding.r); }
+  function sy(y){ return padding.t + (1 - ( (y - yLow) / (yHigh - yLow) )) * (H - padding.t - padding.b); }
+
+  // axes
+  ctx.strokeStyle = '#444'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(padding.l,padding.t); ctx.lineTo(padding.l, H-padding.b); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(padding.l, H-padding.b); ctx.lineTo(W-padding.r, H-padding.b); ctx.stroke();
+
+  // grid x ticks
+  ctx.fillStyle='#333'; ctx.font='12px system-ui'; ctx.textAlign='center'; ctx.textBaseline='top';
+  const xticks = 9;
+  for(let i=0;i<xticks;i++){
+    const xv = xMin + i*(xMax-xMin)/(xticks-1);
+    const px = sx(xv);
+    ctx.fillText(xv.toFixed(0)+' m', px, H-padding.b+6);
+    ctx.strokeStyle='#eee'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(px, padding.t); ctx.lineTo(px, H-padding.b); ctx.stroke();
+  }
+
+  // y ticks
+  ctx.textAlign='right'; ctx.textBaseline='middle';
+  const yticks = 6;
+  for(let i=0;i<yticks;i++){
+    const yv = yLow + i*(yHigh-yLow)/(yticks-1);
+    const py = sy(yv);
+    ctx.fillText(yv.toFixed(3)+' mGal', padding.l-8, py);
+    ctx.strokeStyle='#f2f2f8'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(padding.l, py); ctx.lineTo(W-padding.r, py); ctx.stroke();
+  }
+
+  // draw baseline
+  ctx.beginPath(); ctx.lineWidth = 2; ctx.strokeStyle = '#b09557';
+  for(let i=0;i<n;i++){
+    const px = sx(xs[i]); const py = sy(baseline[i]);
+    if(i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
+  }
+  ctx.stroke();
+
+  // draw active on top
+  ctx.beginPath(); ctx.lineWidth = 2.5; ctx.strokeStyle = '#6787d2';
+  for(let i=0;i<n;i++){
+    const px = sx(xs[i]); const py = sy(active[i]);
+    if(i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
+  }
+  ctx.stroke();
+
+  // mark centre vertical line
+  ctx.strokeStyle = '#666'; ctx.setLineDash([4,6]); ctx.beginPath(); ctx.moveTo(sx(0),padding.t); ctx.lineTo(sx(0),H-padding.b); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle='#222'; ctx.textAlign='center'; ctx.fillText('x = 0 (over centre)', sx(0), padding.t-6);
+
+  // peak info
+  peakInfo.textContent = `Peak Δg ≈ ${peak.val.toFixed(3)} mGal at x ≈ ${peak.x.toFixed(1)} m`;
+}
+
+// event listeners
+[depth,radius,rho,depthBase,radiusBase,rhoBase].forEach(el=> el.addEventListener('input', draw));
+
+// initialize
+draw();
+</script>
+</body>
+</html>
