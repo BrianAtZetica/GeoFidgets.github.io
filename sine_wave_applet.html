@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Sine Wave Propagation (Light Theme)</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f5f5f5;
+      color: #222;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+    }
+
+    canvas {
+      background: #ffffff;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+    }
+
+    .panel {
+      margin-top: 20px;
+      background: #ffffff;
+      padding: 16px;
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      width: 520px;
+    }
+
+    .control {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    label {
+      font-size: 14px;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      height: 26px;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      width: 22px;
+      height: 22px;
+      cursor: pointer;
+    }
+
+    input[type="range"]::-moz-range-thumb {
+      width: 22px;
+      height: 22px;
+      cursor: pointer;
+    }
+
+    input[type="range"][disabled] {
+      opacity: 0.4;
+    }
+
+    .lock {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+    }
+
+    .buttons {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      margin-top: 10px;
+    }
+
+    button {
+      padding: 6px 14px;
+      font-size: 14px;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+    }
+
+    button.primary {
+      background: #1976d2;
+      color: #fff;
+    }
+
+    button.secondary {
+      background: #777;
+      color: #fff;
+    }
+
+    .note {
+      margin-top: 10px;
+      font-size: 13px;
+      color: #555;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <canvas id="canvas" width="800" height="300"></canvas>
+
+  <div class="panel">
+
+    <div class="control">
+      <label>Wavelength (px): <span id="lambdaVal"></span></label>
+      <input type="range" id="lambda" min="40" max="300" value="150">
+      <div class="lock">
+        <input type="radio" name="lock" value="lambda" checked>
+        fixed
+      </div>
+    </div>
+
+    <div class="control">
+      <label>Speed (px/s): <span id="speedVal"></span></label>
+      <input type="range" id="speed" min="10" max="300" value="120">
+      <div class="lock">
+        <input type="radio" name="lock" value="speed">
+        fixed
+      </div>
+    </div>
+
+    <div class="control">
+      <label>Frequency (Hz): <span id="freqVal"></span></label>
+      <input type="range" id="freq" min="0.1" max="5" step="0.1" value="0.8">
+      <div class="lock">
+        <input type="radio" name="lock" value="freq">
+        fixed
+      </div>
+    </div>
+
+    <div class="buttons">
+      <button class="primary" id="toggle">Pause</button>
+      <button class="secondary" id="reset">Reset</button>
+    </div>
+
+    <div class="note">
+      v = λ × f &nbsp;&nbsp; (speed = wavelength × frequency)
+    </div>
+  </div>
+
+<script>
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+
+  const lambdaSlider = document.getElementById('lambda');
+  const speedSlider = document.getElementById('speed');
+  const freqSlider = document.getElementById('freq');
+
+  const lambdaVal = document.getElementById('lambdaVal');
+  const speedVal = document.getElementById('speedVal');
+  const freqVal = document.getElementById('freqVal');
+
+  const toggleBtn = document.getElementById('toggle');
+  const resetBtn = document.getElementById('reset');
+
+  let locked = 'lambda';
+  let running = true;
+  let phase = 0;
+  let lastTime = performance.now();
+
+  function updateUI() {
+    lambdaVal.textContent = Number(lambdaSlider.value).toFixed(0);
+    speedVal.textContent = Number(speedSlider.value).toFixed(0);
+    freqVal.textContent = Number(freqSlider.value).toFixed(2);
+
+    lambdaSlider.disabled = locked === 'lambda';
+    speedSlider.disabled = locked === 'speed';
+    freqSlider.disabled = locked === 'freq';
+  }
+
+  function solve(changed) {
+    let λ = Number(lambdaSlider.value);
+    let v = Number(speedSlider.value);
+    let f = Number(freqSlider.value);
+
+    if (locked === 'lambda') {
+      if (changed === 'speed') f = v / λ;
+      if (changed === 'freq') v = λ * f;
+    }
+
+    if (locked === 'speed') {
+      if (changed === 'lambda') f = v / λ;
+      if (changed === 'freq') λ = v / f;
+    }
+
+    if (locked === 'freq') {
+      if (changed === 'lambda') v = λ * f;
+      if (changed === 'speed') λ = v / f;
+    }
+
+    lambdaSlider.value = λ;
+    speedSlider.value = v;
+    freqSlider.value = f;
+
+    updateUI();
+  }
+
+  document.querySelectorAll('input[name="lock"]').forEach(radio => {
+    radio.addEventListener('change', e => {
+      locked = e.target.value;
+      updateUI();
+    });
+  });
+
+  lambdaSlider.addEventListener('input', () => solve('lambda'));
+  speedSlider.addEventListener('input', () => solve('speed'));
+  freqSlider.addEventListener('input', () => solve('freq'));
+
+  toggleBtn.onclick = () => {
+    running = !running;
+    toggleBtn.textContent = running ? 'Pause' : 'Play';
+  };
+
+  resetBtn.onclick = () => phase = 0;
+
+  function draw(time) {
+    const dt = (time - lastTime) / 1000;
+    lastTime = time;
+
+    if (running) {
+      phase += 2 * Math.PI * Number(freqSlider.value) * dt;
+    }
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const A = 60;
+    const λ = Number(lambdaSlider.value);
+    const cy = canvas.height / 2;
+
+    ctx.strokeStyle = '#1976d2';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+
+    for (let x = 0; x < canvas.width; x++) {
+      const y = cy + A * Math.sin((2 * Math.PI * x) / λ - phase);
+      if (x === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+
+    ctx.stroke();
+
+    // Wavelength label
+    ctx.strokeStyle = '#dc2626';
+    ctx.fillStyle = '#dc2626';
+    ctx.lineWidth = 1.5;
+
+    const x0 = 80;
+    const x1 = x0 + λ;
+    const yLabel = cy + A + 25;
+
+    ctx.beginPath();
+    ctx.moveTo(x0, yLabel);
+    ctx.lineTo(x1, yLabel);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(x0, yLabel - 6);
+    ctx.lineTo(x0, yLabel + 6);
+    ctx.moveTo(x1, yLabel - 6);
+    ctx.lineTo(x1, yLabel + 6);
+    ctx.stroke();
+
+    ctx.font = '14px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('λ', (x0 + x1) / 2, yLabel + 18);
+    requestAnimationFrame(draw);
+  }
+
+  updateUI();
+  requestAnimationFrame(draw);
+</script>
+
+</body>
+</html>
