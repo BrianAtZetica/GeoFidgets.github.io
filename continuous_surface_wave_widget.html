@@ -78,7 +78,7 @@
     <div style="margin-top:8px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <div style="background:#fff;border:1px solid #e6eef9;padding:8px;border-radius:8px">Wavelength: <span id="lambdaVal" style="font-weight:700">—</span> m</div>
       <div style="background:#fff;border:1px solid #e6eef9;padding:8px;border-radius:8px">First sensor distance: <span id="firstDist" style="font-weight:700">—</span> m</div>
-      <div style="margin-left:auto;color:#6b7280;font-size:13px">Dashed lines (bottom plots): <span style="color:#b91c1c">red</span> = Nyquist, <span style="color:#16a34a">green</span> = λ = 5×first distance</div>
+      <div style="margin-left:auto;color:#6b7280;font-size:13px">Dashed lines (below):<BR><span style="color:#b91c1c">red</span>: Nyquist (lower bound on phase angles),<BR><span style="color:#16a34a">green</span>: First geophone must be > λ/5 form source (upper bound on phase angles)<BR><span style="color:#0000ff">blue</span>: Full must span >λ/4 (upper bound on phase angles)</div>
     </div>
 
     <div class="geo-grid" id="geoGrid" aria-live="polite"></div>
@@ -290,9 +290,10 @@
       drawPhaseUnwrapped(canvasUnwrapped, xs, unwrappedDeg, firstOff, dx);
 
       // aliasing background yellow when lambda < 2*dx
-      if(lambda < 2*dx){ widgetWrap.style.backgroundColor = 'yellow'; }
+      if(lambda < 2*dx){ widgetWrap.style.backgroundColor = '#ffbbbb'; }
 	  // nearfield background orange when lambda > 5*firstOff
-      else if(lambda > 5*firstOff){ widgetWrap.style.backgroundColor = 'orange'; }
+      else if(lambda > 5*firstOff){ widgetWrap.style.backgroundColor = '#bbffbb'; }
+      else if(lambda > 4*5*dx){ widgetWrap.style.backgroundColor = '#BBBBff'; }
       else { widgetWrap.style.backgroundColor = ''; }
       
     }
@@ -334,6 +335,7 @@
       const y1 = wrappedDeg[0];
       const nyquistGradDeg = (Math.PI / spacing) * RAD2DEG; // deg/m
       const grad5Deg = (TWO_PI / (5 * x1 || 1e-9)) * RAD2DEG; // deg/m
+      const gradQuarterWavelengthdeg = (TWO_PI / (4 * (xMax - xMin) || 1e-9)) * RAD2DEG; // deg/m
       ctx.setLineDash([6,4]); 
       ctx.lineWidth = 1.5;
 
@@ -354,6 +356,18 @@
       ctx.beginPath();
       for(let xi = xMin; xi <= xMax; xi += (xMax - xMin) / 200) { 
         const yVal = y1 + grad5Deg * (xi - x1);
+        const xPx = padL + ((xi - xMin) / (xMax - xMin)) * (w - padL - padR);
+        const yPx = padT + (1 - ((yVal - yMin) / (yMax - yMin))) * (h - padT - padB);
+        if (xi === xMin) ctx.moveTo(xPx, yPx); 
+        else ctx.lineTo(xPx, yPx);
+      }
+      ctx.stroke();
+
+      // grad quarter wavelength
+      ctx.strokeStyle = '#0000ff'; 
+      ctx.beginPath();
+      for(let xi = xMin; xi <= xMax; xi += (xMax - xMin) / 200) { 
+        const yVal = y1 + gradQuarterWavelengthdeg * (xi - x1);
         const xPx = padL + ((xi - xMin) / (xMax - xMin)) * (w - padL - padR);
         const yPx = padT + (1 - ((yVal - yMin) / (yMax - yMin))) * (h - padT - padB);
         if (xi === xMin) ctx.moveTo(xPx, yPx); 
@@ -420,6 +434,7 @@
       const y1 = unwrappedDeg[0];
       const nyquistGradDeg = (Math.PI / spacing) * RAD2DEG; // deg/m
       const grad5Deg = (TWO_PI / (5 * x1 || 1e-9)) * RAD2DEG;
+      const gradQuarterWavelengthdeg = (TWO_PI / (4 * (xMax - xMin) || 1e-9)) * RAD2DEG; // deg/m
 
       ctx.setLineDash([6,4]);
       ctx.lineWidth = 1.5;
@@ -448,6 +463,18 @@
       }
       ctx.stroke();
 
+      // grad quarter wavelength
+      ctx.strokeStyle = '#0000ff'; 
+      ctx.beginPath();
+      for(let xi = xMin; xi <= xMax; xi += (xMax - xMin) / 200) { 
+        const yVal = y1 + gradQuarterWavelengthdeg * (xi - x1);
+        const xPx = padL + ((xi - xMin) / (xMax - xMin)) * (w - padL - padR);
+        const yPx = padT + ((yVal - yMin) / (yMax - yMin)) * (h - padT - padB);
+        if (xi === xMin) ctx.moveTo(xPx, yPx); 
+        else ctx.lineTo(xPx, yPx);
+      }
+      ctx.stroke();
+
       ctx.setLineDash([]);
       ctx.restore();
 
@@ -469,7 +496,38 @@
         ctx.restore();
       }
 
+      // Draw "Array < λ/4" label on canvas
+      if(lambdaEst > 0 & grad < gradQuarterWavelengthdeg) {
+        ctx.save();
+      
+        ctx.fillStyle = 'rgba(255, 0, 0, 0.6)'; // semi-transparent red
+        ctx.font = 'bold 60px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+      
+        const centerY = canvas.height / 4;
+      
+        ctx.fillText('Array < λ/4', 0, centerY);
+      
+        ctx.restore();
+      }
 
+      // Draw "G1 closer than λ/5" label on canvas
+      if(lambdaEst > 0 & grad < grad5Deg) {
+        ctx.save();
+      
+        ctx.fillStyle = 'rgba(255, 0, 0, 0.6)'; // semi-transparent red
+        ctx.font = 'bold 60px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+      
+        const centerY = canvas.height / 2;
+      
+        ctx.fillText('G1 closer than λ/5', 0, centerY);
+      
+        ctx.restore();
+      }
+      
       // labels
       ctx.fillStyle='#123'; ctx.font='12px sans-serif'; ctx.textAlign='center'; ctx.fillText('Distance (m)', w/2, h-8);
       ctx.save(); ctx.translate(12, h/2); ctx.rotate(-Math.PI/2); ctx.textAlign='center'; ctx.fillText('Phase (°, unwrapped)', 0,0); ctx.restore();
