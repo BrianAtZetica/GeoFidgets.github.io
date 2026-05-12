@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Dipole as Sum of Two Monopoles</title>
+<style>
+  body { font-family: sans-serif; margin: 10px; }
+  #controls { margin-bottom: 10px; }
+  canvas { border: 1px solid #444; }
+  label { margin-right: 10px; }
+</style>
+</head>
+<body>
+<h3>Dipole field as vector sum of two opposite monopoles (1/r³)</h3>
+
+<div id="controls">
+  <label>
+    Separation:
+    <input type="range" id="sep" min="10" max="150" value="60">
+    <span id="sepVal">60</span> px
+  </label>
+  <br>
+  <label>
+    Arrow scale:
+    <input type="range" id="vecScale" min="500" max="8000" value="3000">
+    <span id="vecVal">3000</span>
+  </label>
+  <br>
+  <label><input type="checkbox" id="showPos" checked> Show + monopole field</label>
+  <label><input type="checkbox" id="showNeg" checked> Show − monopole field</label>
+  <label><input type="checkbox" id="showDipole" checked> Show dipole (sum) field</label>
+</div>
+
+<canvas id="fieldCanvas" width="600" height="400"></canvas>
+
+<script>
+const canvas = document.getElementById('fieldCanvas');
+const ctx = canvas.getContext('2d');
+
+const sepSlider = document.getElementById('sep');
+const sepVal = document.getElementById('sepVal');
+const vecSlider = document.getElementById('vecScale');
+const vecVal = document.getElementById('vecVal');
+const showPos = document.getElementById('showPos');
+const showNeg = document.getElementById('showNeg');
+const showDipole = document.getElementById('showDipole');
+
+const W = canvas.width;
+const H = canvas.height;
+const cx = W / 2;
+const cy = H / 2;
+
+// Denser grid
+const step = 15;
+const minR = 8;
+
+function draw() {
+  const sep = parseFloat(sepSlider.value);
+  const scale = parseFloat(vecSlider.value);
+  sepVal.textContent = sep;
+  vecVal.textContent = scale;
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, W, H);
+
+  const pos = { x: cx - sep / 2, y: cy };
+  const neg = { x: cx + sep / 2, y: cy };
+
+  // Draw monopoles
+  ctx.beginPath();
+  ctx.fillStyle = "red";
+  ctx.arc(pos.x, pos.y, 6, 0, 2 * Math.PI);
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.fillStyle = "blue";
+  ctx.arc(neg.x, neg.y, 6, 0, 2 * Math.PI);
+  ctx.fill();
+
+  // Field vectors
+  for (let x = step / 2; x < W; x += step) {
+    for (let y = step / 2; y < H; y += step) {
+      const p = { x, y };
+
+      const vPos = fieldFromMonopole(pos, p, +1, scale);
+      const vNeg = fieldFromMonopole(neg, p, -1, scale);
+
+      if (showPos.checked)
+        drawArrow(p.x, p.y, p.x + vPos.x, p.y + vPos.y, "rgba(255,0,0,0.3)");
+
+      if (showNeg.checked)
+        drawArrow(p.x, p.y, p.x + vNeg.x, p.y + vNeg.y, "rgba(0,0,255,0.3)");
+
+      if (showDipole.checked) {
+        const vx = vPos.x + vNeg.x;
+        const vy = vPos.y + vNeg.y;
+        drawArrow(p.x, p.y, p.x + vx, p.y + vy, "rgba(0,0,0,0.85)");
+      }
+    }
+  }
+}
+
+function fieldFromMonopole(source, point, sign, scale) {
+  let dx = point.x - source.x;
+  let dy = point.y - source.y;
+  let r2 = dx * dx + dy * dy;
+  let r = Math.sqrt(r2);
+  if (r < minR) r = minR;
+  const invr3 = 1 / (r * r * r);
+  const mag = sign * scale * invr3;
+  return { x: mag * dx, y: mag * dy };
+}
+
+function drawArrow(x0, y0, x1, y1, color) {
+  const headLen = 6;
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  if (len < 0.5) return;
+
+  const ux = dx / len;
+  const uy = dy / len;
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  ctx.lineTo(x1, y1);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x1 - headLen * (ux + 0.5 * uy), y1 - headLen * (uy - 0.5 * ux));
+  ctx.lineTo(x1 - headLen * (ux - 0.5 * uy), y1 - headLen * (uy + 0.5 * ux));
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+[sepSlider, vecSlider, showPos, showNeg, showDipole].forEach(el =>
+  el.addEventListener('input', draw)
+);
+
+draw();
+</script>
+</body>
+</html>

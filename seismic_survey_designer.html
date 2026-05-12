@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Seismic Reflection Survey Design Widget</title>
+  <style>
+    body{font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; margin:20px;}
+    .panel{display:flex; gap:20px; align-items:flex-start}
+    .controls{width:360px}
+    label{display:block;margin:8px 0 4px;font-weight:600}
+    input[type=number]{width:100%;padding:8px;border-radius:6px;border:1px solid #ccc}
+    .outputs{flex:1}
+    .card{background:#fbfbfb;border:1px solid #eee;padding:12px;border-radius:8px;margin-bottom:12px}
+    canvas{background:white;border:1px solid #eee;border-radius:6px; display:block}
+    .small{font-size:0.9rem;color:#444}
+    .assumptions{font-size:0.85rem;color:#333;background:#fffef6;padding:10px;border-radius:6px;border:1px dashed #f0e68c}
+  </style>
+  <!-- Chart.js from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <h1>Seismic reflection survey design — interactive widget</h1>
+  <div class="panel">
+    <div class="controls card">
+      <label>Shot spacing (m)</label>
+      <input id="shotSpacing" type="number" value="10" min="1" step="1">
+
+      <label>Geophone spacing (m)</label>
+      <input id="geoSpacing" type="number" value="5" min="0.1" step="0.1">
+
+      <label>Number of channels (active geophones per spread)</label>
+      <input id="nChannels" type="number" value="48" min="1" step="1">
+
+      <label>Total line length (m)</label>
+      <input id="lineLength" type="number" value="2000" min="1" step="1">
+
+      <label>Number of physical geophones available (for roll-on)</label>
+      <input id="physicalGeos" type="number" value="48" min="1" step="1">
+
+      <label>Fold resolution (m per bin for plot)</label>
+      <input id="binSize" type="number" value="5" min="0.5" step="0.5">
+
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <button id="computeBtn">Compute & Plot</button>
+        <button id="resetBtn">Reset</button>
+      </div>
+
+      <hr>
+      <div class="assumptions">
+        <strong>Assumptions (explicit):</strong>
+        <ul>
+          <li>Symmetric split-spread about each shot (geophones centred on the shot).</li>
+          <li>Maximum offset = distance from shot to outermost geophone = floor(N_channels/2) × geophone spacing.</li>
+          <li>Maximum depth of useful reflection imaging ≈ 0.5 × maximum offset (rule-of-thumb).</li>
+          <li>Fold is computed by simulating all shot–geophone traces and binning midpoints along the line.</li>
+          <li>Roll-on calculation: if available physical geophones &lt; required channels, we compute how many forward moves (roll-ons) are needed per shot to cover the spread.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="outputs">
+      <div class="card">
+        <h3>Summary</h3>
+        <div id="summary" class="small">Change inputs and press <em>Compute & Plot</em>.</div>
+      </div>
+
+      <div class="card">
+        <h3>Fold of coverage vs line distance</h3>
+        <div style="height:260px;">
+          <canvas id="foldChart" width="900" height="260" style="height:260px; max-height:260px; width:100%"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Numeric details</h3>
+        <div id="details" class="small"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+function clamp(x, lo, hi){return Math.max(lo, Math.min(hi, x));}
+
+function computeAndPlot() {
+  const shotSpacing = parseFloat(document.getElementById('shotSpacing').value);
+  const geoSpacing = parseFloat(document.getElementById('geoSpacing').value);
+  const nChannels = parseInt(document.getElementById('nChannels').value,10);
+  const lineLength = parseFloat(document.getElementById('lineLength').value);
+  const physicalGeos = parseInt(document.getElementById('physicalGeos').value,10);
+  const binSize = parseFloat(document.getElementById('binSize').value);
+
+  if(!(shotSpacing>0 && geoSpacing>0 && nChannels>0 && lineLength>0 && binSize>0)){
+    alert('All numeric inputs must be positive.');
+    return;
+  }
+
+  // Derived
+  const maxOffset = Math.floor(nChannels/2) * geoSpacing; // metres
+  const maxDepth = maxOffset * 0.5; // rule-of-thumb
+
+  // Shots along line: place first shot one shot spacing before the first geophone (so initial fold is zero),
+  // and allow shots slightly beyond the line to capture the roll-on/fall-off behaviour.
+  const startShot = -shotSpacing;
+  const endShot = lineLength + shotSpacing;
+  const nShots = Math.floor((endShot - startShot) / shotSpacing) + 1;
+  const shotPositions = [];
+  for(let i=0;i<nShots;i++) shotPositions.push(startShot + i * shotSpacing);
+
+  // Generate geophone offsets for a symmetric split-spread about each shot
+  const geophoneOffsets = [];
+  const leftCount = Math.floor(nChannels/2);
+  const rightCount = nChannels - leftCount; // includes centre if odd
+  for(let i=-leftCount;i<rightCount;i++) geophoneOffsets.push(i * geoSpacing);
+
+  // Simulate traces but only where the geophone actually lies on the survey line [0, lineLength].
+  // This produces the correct start/end ramp without forcing endpoints.
+  const midpoints = [];
+  for(const s of shotPositions){
+    for(const go of geophoneOffsets){
+      const gpos = s + go; // absolute geophone position
+      // require geophone to be placed on the survey line
+      if(gpos < 0 || gpos > lineLength) continue;
+      const midpoint = (s + gpos) / 2.0;
+      midpoints.push(midpoint);
+    }
+  }
+
+  // Bin midpoints along the line to compute fold per location
+  const nBins = Math.max(2, Math.ceil(lineLength / binSize));
+  const fold = new Array(nBins).fill(0);
+  const binEdges = new Array(nBins).fill(0).map((_,i)=> i * binSize);
+  for(const m of midpoints){
+    if(m < 0 || m > lineLength) continue; // ignore midpoints outside the surveyed line
+    const binIndex = Math.floor(m / binSize);
+    if(binIndex >=0 && binIndex < nBins) fold[binIndex]++;
+  }
+
+  const foldPositions = binEdges.slice(0,nBins);
+
+  // Theoretical max fold (interior) using approximate formula: (nChannels * geoSpacing) / (2 * shotSpacing)
+  const theoreticalMaxFold = (nChannels * geoSpacing) / (2 * shotSpacing);
+
+  // Roll-on calculation
+  let positionsPerSpread = 1;
+  let rollOnMovesPerShot = 0;
+  let totalRollOnMoves = 0;
+  if(physicalGeos < nChannels){
+    positionsPerSpread = Math.ceil(nChannels / physicalGeos);
+    rollOnMovesPerShot = positionsPerSpread - 1;
+    totalRollOnMoves = rollOnMovesPerShot * nShots;
+  }
+
+  // Update summary & details
+  const summaryDiv = document.getElementById('summary');
+  summaryDiv.innerHTML = `Shots: <strong>${nShots}</strong> — Max offset: <strong>${maxOffset.toFixed(2)} m</strong> — Max depth (rule of thumb): <strong>${maxDepth.toFixed(2)} m</strong>`;
+
+  const detailsDiv = document.getElementById('details');
+  detailsDiv.innerHTML = `
+    <b>Computed values</b><br>
+    Number of shots: ${nShots}<br>
+    Maximum offset (outer geophone from shot): ${maxOffset.toFixed(2)} m<br>
+    Approx. maximum depth of investigation (offset/2): ${maxDepth.toFixed(2)} m<br>
+    Theoretical interior max fold (approx): ${theoreticalMaxFold.toFixed(2)} traces per CMP<br>
+    Simulated maximum fold (from midpoint binning): ${Math.max(...fold).toFixed(0)} traces per bin<br>
+    Number of physical geophones available: ${physicalGeos}<br>
+    Positions needed per spread (if physical geophones &lt; channels): ${positionsPerSpread}<br>
+    Roll-on moves per shot: ${rollOnMovesPerShot}<br>
+    Total roll-on moves (approx): ${totalRollOnMoves}
+  `;
+
+  // Plot using Chart.js
+  const ctx = document.getElementById('foldChart').getContext('2d');
+  if(window._foldChart) window._foldChart.destroy();
+  window._foldChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: foldPositions.map(p=>p.toFixed(1)),
+      datasets: [{
+        label: 'Fold (traces per CMP bin)',
+        data: fold,
+        borderWidth: 2,
+        fill: true,
+        tension: 0.15,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: { title: {display:true,text:'Distance along line (m)'}},
+        y: { title: {display:true,text:'Fold (traces per bin)'}, beginAtZero:true}
+      },
+      plugins: {legend:{display:false}}
+    }
+  });
+}
+
+// Event listeners and reset
+document.getElementById('computeBtn').addEventListener('click',computeAndPlot);
+document.getElementById('resetBtn').addEventListener('click',()=>{
+  document.getElementById('shotSpacing').value=10;
+  document.getElementById('geoSpacing').value=5;
+  document.getElementById('nChannels').value=48;
+  document.getElementById('lineLength').value=2000;
+  document.getElementById('physicalGeos').value=48;
+  document.getElementById('binSize').value=5;
+  computeAndPlot();
+});
+
+// initial compute
+computeAndPlot();
+</script>
+</body>
+</html>
